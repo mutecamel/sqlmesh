@@ -26,6 +26,13 @@ from sqlmesh.utils.date import now
 from sqlmesh.utils.errors import ConfigError, MacroEvalError
 from sqlmesh.utils.jinja import JinjaMacroRegistry, MacroReference, MacroReturnVal
 
+if t.TYPE_CHECKING:
+    from typing import Protocol
+
+    class Model(Protocol):
+        def __getattr__(self, key: str) -> t.Any: ...
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -249,6 +256,25 @@ def generate_source(sources: t.Dict[str, t.Any], api: Api) -> t.Callable:
     return source
 
 
+def generate_model(model: AttributeDict, raw_code: str) -> Model:
+    class Model:
+        def __init__(self, model: AttributeDict) -> None:
+            self._model = model
+            self._raw_code_key = "raw_code" if DBT_VERSION >= (1, 3, 0) else "raw_sql"  # type: ignore
+
+            # We exclude the raw SQL code to reduce the payload size. It's still accessible through
+            # the JinjaQuery instance stored in the resulting SQLMesh model's `query` field.
+            model.pop(self._raw_code_key, None)
+
+        def __getattr__(self, key: str) -> t.Any:
+            if key == self._raw_code_key:
+                return raw_code
+
+            return getattr(self._model, key)
+
+    return Model(model)
+
+
 def return_val(val: t.Any) -> None:
     raise MacroReturnVal(val)
 
@@ -464,6 +490,15 @@ def create_builtin_globals(
 
     builtin_globals["run_started_at"] = jinja_globals.get("execution_dt") or now()
     builtin_globals["dbt"] = AttributeDict(builtin_globals)
+
+    if (
+        snapshot is not None
+        and snapshot.is_model
+        and snapshot.model.is_sql
+        and (model := jinja_globals.pop("model", None)) is not None
+    ):
+        raw_code = snapshot.model.query.name  # type: ignore
+        builtin_globals["model"] = generate_model(model, raw_code)
 
     return {**builtin_globals, **jinja_globals}
 

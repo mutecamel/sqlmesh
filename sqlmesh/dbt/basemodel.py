@@ -19,6 +19,7 @@ from sqlmesh.dbt.column import (
     column_types_to_sqlmesh,
 )
 from sqlmesh.dbt.common import (
+    DBT_ALL_MODEL_ATTRS,
     DbtConfig,
     Dependencies,
     GeneralConfig,
@@ -375,15 +376,17 @@ class BaseModelConfig(GeneralConfig):
     def _model_jinja_context(
         self, context: DbtContext, dependencies: Dependencies
     ) -> t.Dict[str, t.Any]:
-        model_node: AttributeDict[str, t.Any] = AttributeDict(
-            {
-                k: v
-                for k, v in context._manifest._manifest.nodes[self.node_name].to_dict().items()
-                if k in dependencies.model_attrs
-            }
-            if context._manifest and self.node_name in context._manifest._manifest.nodes
-            else {}
-        )
+        if context._manifest and self.node_name in context._manifest._manifest.nodes:
+            attributes = context._manifest._manifest.nodes[self.node_name].to_dict()
+            if DBT_ALL_MODEL_ATTRS in dependencies.model_attrs:
+                model_node: AttributeDict[str, t.Any] = AttributeDict(attributes)
+            else:
+                model_node = AttributeDict(
+                    filter(lambda kv: kv[0] in dependencies.model_attrs, attributes.items())
+                )
+        else:
+            model_node = AttributeDict({})
+
         return {
             "this": self.relation_info,
             "model": model_node,
